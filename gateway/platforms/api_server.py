@@ -2,7 +2,7 @@
 OpenAI-compatible API server platform adapter.
 
 Exposes an HTTP server with endpoints:
-- POST /v1/chat/completions        — OpenAI Chat Completions format (stateless; opt-in session continuity via X-Hermes-Session-Id header)
+- POST /v1/chat/completions        — OpenAI Chat Completions format (stateless)
 - POST /v1/responses               — OpenAI Responses API format (stateful via previous_response_id)
 - GET  /v1/responses/{response_id} — Retrieve a stored response
 - DELETE /v1/responses/{response_id} — Delete a stored response
@@ -28,6 +28,7 @@ from typing import Any, Dict, List, Optional
 
 try:
     from aiohttp import web
+
     AIOHTTP_AVAILABLE = True
 except ImportError:
     AIOHTTP_AVAILABLE = False
@@ -70,6 +71,7 @@ class ResponseStore:
         if db_path is None:
             try:
                 from hermes_cli.config import get_hermes_home
+
                 db_path = str(get_hermes_home() / "response_store.db")
             except Exception:
                 db_path = ":memory:"
@@ -101,6 +103,7 @@ class ResponseStore:
         if row is None:
             return None
         import time
+
         self._conn.execute(
             "UPDATE responses SET accessed_at = ? WHERE response_id = ?",
             (time.time(), response_id),
@@ -111,6 +114,7 @@ class ResponseStore:
     def put(self, response_id: str, data: Dict[str, Any]) -> None:
         """Store a response, evicting the oldest if at capacity."""
         import time
+
         self._conn.execute(
             "INSERT OR REPLACE INTO responses (response_id, data, accessed_at) VALUES (?, ?, ?)",
             (response_id, json.dumps(data, default=str), time.time()),
@@ -171,6 +175,7 @@ _CORS_HEADERS = {
 
 
 if AIOHTTP_AVAILABLE:
+
     @web.middleware
     async def cors_middleware(request, handler):
         """Add CORS headers for explicitly allowed origins; handle OPTIONS preflight."""
@@ -195,7 +200,12 @@ else:
     cors_middleware = None  # type: ignore[assignment]
 
 
-def _openai_error(message: str, err_type: str = "invalid_request_error", param: str = None, code: str = None) -> Dict[str, Any]:
+def _openai_error(
+    message: str,
+    err_type: str = "invalid_request_error",
+    param: str = None,
+    code: str = None,
+) -> Dict[str, Any]:
     """OpenAI-style error envelope."""
     return {
         "error": {
@@ -208,6 +218,7 @@ def _openai_error(message: str, err_type: str = "invalid_request_error", param: 
 
 
 if AIOHTTP_AVAILABLE:
+
     @web.middleware
     async def body_limit_middleware(request, handler):
         """Reject overly large request bodies early based on Content-Length."""
@@ -216,9 +227,20 @@ if AIOHTTP_AVAILABLE:
             if cl is not None:
                 try:
                     if int(cl) > MAX_REQUEST_BYTES:
-                        return web.json_response(_openai_error("Request body too large.", code="body_too_large"), status=413)
+                        return web.json_response(
+                            _openai_error(
+                                "Request body too large.", code="body_too_large"
+                            ),
+                            status=413,
+                        )
                 except ValueError:
-                    return web.json_response(_openai_error("Invalid Content-Length header.", code="invalid_content_length"), status=400)
+                    return web.json_response(
+                        _openai_error(
+                            "Invalid Content-Length header.",
+                            code="invalid_content_length",
+                        ),
+                        status=400,
+                    )
         return await handler(request)
 else:
     body_limit_middleware = None  # type: ignore[assignment]
@@ -230,6 +252,7 @@ _SECURITY_HEADERS = {
 
 
 if AIOHTTP_AVAILABLE:
+
     @web.middleware
     async def security_headers_middleware(request, handler):
         """Add security headers to all responses (including errors)."""
@@ -243,14 +266,17 @@ else:
 
 class _IdempotencyCache:
     """In-memory idempotency cache with TTL and basic LRU semantics."""
+
     def __init__(self, max_items: int = 1000, ttl_seconds: int = 300):
         from collections import OrderedDict
+
         self._store = OrderedDict()
         self._ttl = ttl_seconds
         self._max = max_items
 
     def _purge(self):
         import time as _t
+
         now = _t.time()
         expired = [k for k, v in self._store.items() if now - v["ts"] > self._ttl]
         for k in expired:
@@ -265,6 +291,7 @@ class _IdempotencyCache:
             return item["resp"]
         resp = await compute_coro()
         import time as _t
+
         self._store[key] = {"resp": resp, "fp": fingerprint, "ts": _t.time()}
         self._purge()
         return resp
@@ -275,6 +302,7 @@ _idem_cache = _IdempotencyCache()
 
 def _make_request_fingerprint(body: Dict[str, Any], keys: List[str]) -> str:
     from hashlib import sha256
+
     subset = {k: body.get(k) for k in keys}
     return sha256(repr(subset).encode("utf-8")).hexdigest()
 
@@ -291,7 +319,9 @@ class APIServerAdapter(BasePlatformAdapter):
         super().__init__(config, Platform.API_SERVER)
         extra = config.extra or {}
         self._host: str = extra.get("host", os.getenv("API_SERVER_HOST", DEFAULT_HOST))
-        self._port: int = int(extra.get("port", os.getenv("API_SERVER_PORT", str(DEFAULT_PORT))))
+        self._port: int = int(
+            extra.get("port", os.getenv("API_SERVER_PORT", str(DEFAULT_PORT)))
+        )
         self._api_key: str = extra.get("key", os.getenv("API_SERVER_KEY", ""))
         self._cors_origins: tuple[str, ...] = self._parse_cors_origins(
             extra.get("cors_origins", os.getenv("API_SERVER_CORS_ORIGINS", "")),
@@ -300,7 +330,6 @@ class APIServerAdapter(BasePlatformAdapter):
         self._runner: Optional["web.AppRunner"] = None
         self._site: Optional["web.TCPSite"] = None
         self._response_store = ResponseStore()
-        self._session_db: Optional[Any] = None  # Lazy-init SessionDB for session continuity
 
     @staticmethod
     def _parse_cors_origins(value: Any) -> tuple[str, ...]:
@@ -368,7 +397,13 @@ class APIServerAdapter(BasePlatformAdapter):
                 return None  # Auth OK
 
         return web.json_response(
-            {"error": {"message": "Invalid API key", "type": "invalid_request_error", "code": "invalid_api_key"}},
+            {
+                "error": {
+                    "message": "Invalid API key",
+                    "type": "invalid_request_error",
+                    "code": "invalid_api_key",
+                }
+            },
             status=401,
         )
 
@@ -376,23 +411,33 @@ class APIServerAdapter(BasePlatformAdapter):
     # Agent creation helper
     # ------------------------------------------------------------------
 
+    # Maximum delegation depth for profile-to-profile orchestration
+    _MAX_DELEGATION_DEPTH = 2
+
     def _create_agent(
         self,
         ephemeral_system_prompt: Optional[str] = None,
         session_id: Optional[str] = None,
         stream_delta_callback=None,
         tool_progress_callback=None,
+        delegate_depth: int = 1,
+        skip_memory: bool = False,
+        is_delegation: bool = False,
     ) -> Any:
         """
         Create an AIAgent instance using the gateway's runtime config.
 
         Uses _resolve_runtime_agent_kwargs() to pick up model, api_key,
-        base_url, etc. from config.yaml / env vars.  Toolsets are resolved
+        base_url, etc. from config.yaml / env vars. Toolsets are resolved
         from config.yaml platform_toolsets.api_server (same as all other
         gateway platforms), falling back to the hermes-api-server default.
         """
         from run_agent import AIAgent
-        from gateway.run import _resolve_runtime_agent_kwargs, _resolve_gateway_model, _load_gateway_config
+        from gateway.run import (
+            _resolve_runtime_agent_kwargs,
+            _resolve_gateway_model,
+            _load_gateway_config,
+        )
         from hermes_cli.tools_config import _get_platform_tools
 
         runtime_kwargs = _resolve_runtime_agent_kwargs()
@@ -415,7 +460,12 @@ class APIServerAdapter(BasePlatformAdapter):
             platform="api_server",
             stream_delta_callback=stream_delta_callback,
             tool_progress_callback=tool_progress_callback,
+            skip_memory=skip_memory,
         )
+
+        # Set delegation depth after construction (AIAgent doesn't accept it in __init__)
+        agent._delegate_depth = delegate_depth
+
         return agent
 
     # ------------------------------------------------------------------
@@ -432,20 +482,22 @@ class APIServerAdapter(BasePlatformAdapter):
         if auth_err:
             return auth_err
 
-        return web.json_response({
-            "object": "list",
-            "data": [
-                {
-                    "id": "hermes-agent",
-                    "object": "model",
-                    "created": int(time.time()),
-                    "owned_by": "hermes",
-                    "permission": [],
-                    "root": "hermes-agent",
-                    "parent": None,
-                }
-            ],
-        })
+        return web.json_response(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": "hermes-agent",
+                        "object": "model",
+                        "created": int(time.time()),
+                        "owned_by": "hermes",
+                        "permission": [],
+                        "root": "hermes-agent",
+                        "parent": None,
+                    }
+                ],
+            }
+        )
 
     async def _handle_chat_completions(self, request: "web.Request") -> "web.Response":
         """POST /v1/chat/completions — OpenAI Chat Completions format."""
@@ -453,16 +505,52 @@ class APIServerAdapter(BasePlatformAdapter):
         if auth_err:
             return auth_err
 
+        # Detect cross-profile delegation headers for persistent session creation
+        delegation_headers = {
+            "is_delegation": request.headers.get("X-Hermes-Delegation") == "true",
+            "source_profile": request.headers.get("X-Hermes-Source-Profile"),
+            "task_id": request.headers.get("X-Hermes-Task-ID"),
+            "delegate_depth": int(request.headers.get("X-Hermes-Delegate-Depth", 0)),
+            "allow_subagents": request.headers.get("X-Hermes-Allow-Subagents", "true")
+            == "true",
+            "max_depth": int(request.headers.get("X-Hermes-Max-Depth", 2)),
+        }
+
+        # MAX_DEPTH enforcement: Prevent infinite delegation recursion
+        if delegation_headers["is_delegation"]:
+            if delegation_headers["delegate_depth"] >= delegation_headers["max_depth"]:
+                return web.json_response(
+                    {
+                        "error": {
+                            "message": (
+                                f"Delegation depth limit reached ({delegation_headers['max_depth']}). "
+                                "Subagents cannot spawn further subagents."
+                            ),
+                            "type": "invalid_request_error",
+                        }
+                    },
+                    status=400,
+                )
+            # Increment depth for downstream propagation
+            delegation_headers["delegate_depth"] += 1
+
         # Parse request body
         try:
             body = await request.json()
         except (json.JSONDecodeError, Exception):
-            return web.json_response(_openai_error("Invalid JSON in request body"), status=400)
+            return web.json_response(
+                _openai_error("Invalid JSON in request body"), status=400
+            )
 
         messages = body.get("messages")
         if not messages or not isinstance(messages, list):
             return web.json_response(
-                {"error": {"message": "Missing or invalid 'messages' field", "type": "invalid_request_error"}},
+                {
+                    "error": {
+                        "message": "Missing or invalid 'messages' field",
+                        "type": "invalid_request_error",
+                    }
+                },
                 status=400,
             )
 
@@ -493,26 +581,131 @@ class APIServerAdapter(BasePlatformAdapter):
 
         if not user_message:
             return web.json_response(
-                {"error": {"message": "No user message found in messages", "type": "invalid_request_error"}},
+                {
+                    "error": {
+                        "message": "No user message found in messages",
+                        "type": "invalid_request_error",
+                    }
+                },
                 status=400,
             )
 
-        # Allow caller to continue an existing session by passing X-Hermes-Session-Id.
-        # When provided, history is loaded from state.db instead of from the request body.
-        provided_session_id = request.headers.get("X-Hermes-Session-Id", "").strip()
-        if provided_session_id:
-            session_id = provided_session_id
+        # PREFIX DELEGATED MESSAGES: Add delegation context to user message
+        # This tells the agent it's a delegated worker, not a human user conversation
+        if delegation_headers["is_delegation"] and delegation_headers["source_profile"]:
+            allow_subagents = delegation_headers.get("allow_subagents", True)
+            subagent_status = (
+                "delegate_task ALLOWED"
+                if allow_subagents
+                else "delegate_task NOT ALLOWED"
+            )
+
+            task_id = delegation_headers.get("task_id", "unknown")
+
+            user_message = (
+                f"<DELEGATED from profile {delegation_headers['source_profile']} | "
+                f"{subagent_status}>\n\n"
+                f"YOUR TASK:\n{user_message}\n\n"
+                f"Summary: what you did, found, created, issues.\n"
+                f"End with <TASK {task_id} COMPLETED>."
+            )
+
+            user_message = (
+                f"<DELEGATED from profile {delegation_headers['source_profile']} | "
+                f"{subagent_status}>\n\n"
+                f"YOUR TASK:\n{user_message}\n\n"
+                f"Summary: what you did, found, created, issues.\n"
+                f"End with <TASK {task_id} COMPLETED>."
+            )
+
+        # Create isolated child session for each delegation
+        child_session_id = None
+        if (
+            delegation_headers["is_delegation"]
+            and delegation_headers["source_profile"]
+            and delegation_headers["task_id"]
+        ):
             try:
-                if self._session_db is None:
-                    from hermes_state import SessionDB
-                    self._session_db = SessionDB()
-                history = self._session_db.get_messages_as_conversation(session_id)
+                from hermes_cli.profiles import get_current_profile
+
+                target_profile = get_current_profile() or "unknown"
+
+                # Create isolated session (each delegation is independent)
+                child_session_id = self._create_child_session(
+                    source_profile=delegation_headers["source_profile"],
+                    task_id=delegation_headers["task_id"],
+                    target_profile=target_profile,
+                    initial_message=user_message,
+                )
+                logger.info(
+                    f"Created child session {child_session_id} for delegation from {delegation_headers['source_profile']} → {target_profile} task {delegation_headers['task_id']}"
+                )
+
             except Exception as e:
-                logger.warning("Failed to load session history for %s: %s", session_id, e)
-                history = []
-        else:
-            session_id = str(uuid.uuid4())
-            # history already set from request body above
+                logger.warning(f"Failed to create child session for delegation: {e}")
+
+        # Use child session ID if created, otherwise generate new UUID
+        session_id = child_session_id or str(uuid.uuid4())
+
+        # AUTO-CONTEXT LOADING: If this is a delegated session, search for previous context
+        if session_id.startswith("delegated-"):
+            try:
+                from hermes_state import SessionDB
+
+                # Extract source profile from session_id
+                parts = session_id.split("-")
+                if len(parts) >= 2:
+                    source_profile_from_id = parts[1]
+
+                    db = SessionDB()
+                    all_sessions = db.list_sessions_rich()
+
+                    # Find recent delegated sessions from same source (excluding current)
+                    recent_sessions = [
+                        s
+                        for s in all_sessions
+                        if s.get("id", "").startswith(
+                            f"delegated-{source_profile_from_id}-"
+                        )
+                        and s.get("id") != session_id
+                    ]
+
+                    if recent_sessions:
+                        # Sort by started_at (newest first)
+                        recent_sessions.sort(
+                            key=lambda x: x.get("started_at", 0), reverse=True
+                        )
+                        most_recent = recent_sessions[0]
+                        prev_session_id = most_recent["id"]
+
+                        # Load messages from that session
+                        prev_messages = db.get_messages(prev_session_id)
+                        if prev_messages:
+                            # Build context summary
+                            context_summary = (
+                                "\n\n=== Previous Conversation Context ===\n"
+                            )
+                            for msg in prev_messages[-3:]:  # Last 3 messages
+                                role = msg.get("role", "")
+                                content = msg.get("content", "")
+                                if role == "user":
+                                    context_summary += f"User: {content}\n"
+                                elif role == "assistant":
+                                    context_summary += f"Assistant: {content}\n"
+                            context_summary += "=== End Context ===\n\n"
+
+                            # Inject into system prompt
+                            if system_prompt:
+                                system_prompt = context_summary + system_prompt
+                            else:
+                                system_prompt = context_summary
+
+                            logger.info(
+                                f"Auto-loaded context from {prev_session_id} "
+                                f"({len(prev_messages)} messages) for session {session_id}"
+                            )
+            except Exception as e:
+                logger.debug(f"Auto-context loading failed: {e}")
 
         completion_id = f"chatcmpl-{uuid.uuid4().hex[:29]}"
         model_name = body.get("model", "hermes-agent")
@@ -520,6 +713,7 @@ class APIServerAdapter(BasePlatformAdapter):
 
         if stream:
             import queue as _q
+
             _stream_q: _q.Queue = _q.Queue()
 
             def _on_delta(delta):
@@ -538,6 +732,7 @@ class APIServerAdapter(BasePlatformAdapter):
                 if name.startswith("_"):
                     return  # Skip internal events (_thinking)
                 from agent.display import get_tool_emoji
+
                 emoji = get_tool_emoji(name)
                 label = preview or name
                 _stream_q.put(f"\n`{emoji} {label}`\n")
@@ -545,19 +740,28 @@ class APIServerAdapter(BasePlatformAdapter):
             # Start agent in background.  agent_ref is a mutable container
             # so the SSE writer can interrupt the agent on client disconnect.
             agent_ref = [None]
-            agent_task = asyncio.ensure_future(self._run_agent(
-                user_message=user_message,
-                conversation_history=history,
-                ephemeral_system_prompt=system_prompt,
-                session_id=session_id,
-                stream_delta_callback=_on_delta,
-                tool_progress_callback=_on_tool_progress,
-                agent_ref=agent_ref,
-            ))
+            agent_task = asyncio.ensure_future(
+                self._run_agent(
+                    user_message=user_message,
+                    conversation_history=history,
+                    ephemeral_system_prompt=system_prompt,
+                    session_id=session_id,
+                    stream_delta_callback=_on_delta,
+                    tool_progress_callback=_on_tool_progress,
+                    agent_ref=agent_ref,
+                    delegate_depth=delegation_headers.get("delegate_depth", 0),
+                    is_delegation=delegation_headers["is_delegation"],
+                )
+            )
 
             return await self._write_sse_chat_completion(
-                request, completion_id, model_name, created, _stream_q,
-                agent_task, agent_ref, session_id=session_id,
+                request,
+                completion_id,
+                model_name,
+                created,
+                _stream_q,
+                agent_task,
+                agent_ref,
             )
 
         # Non-streaming: run the agent (with optional Idempotency-Key)
@@ -567,26 +771,40 @@ class APIServerAdapter(BasePlatformAdapter):
                 conversation_history=history,
                 ephemeral_system_prompt=system_prompt,
                 session_id=session_id,
+                delegate_depth=delegation_headers.get("delegate_depth", 0),
+                is_delegation=delegation_headers["is_delegation"],
             )
 
         idempotency_key = request.headers.get("Idempotency-Key")
         if idempotency_key:
-            fp = _make_request_fingerprint(body, keys=["model", "messages", "tools", "tool_choice", "stream"])
+            fp = _make_request_fingerprint(
+                body, keys=["model", "messages", "tools", "tool_choice", "stream"]
+            )
             try:
-                result, usage = await _idem_cache.get_or_set(idempotency_key, fp, _compute_completion)
+                result, usage = await _idem_cache.get_or_set(
+                    idempotency_key, fp, _compute_completion
+                )
             except Exception as e:
-                logger.error("Error running agent for chat completions: %s", e, exc_info=True)
+                logger.error(
+                    "Error running agent for chat completions: %s", e, exc_info=True
+                )
                 return web.json_response(
-                    _openai_error(f"Internal server error: {e}", err_type="server_error"),
+                    _openai_error(
+                        f"Internal server error: {e}", err_type="server_error"
+                    ),
                     status=500,
                 )
         else:
             try:
                 result, usage = await _compute_completion()
             except Exception as e:
-                logger.error("Error running agent for chat completions: %s", e, exc_info=True)
+                logger.error(
+                    "Error running agent for chat completions: %s", e, exc_info=True
+                )
                 return web.json_response(
-                    _openai_error(f"Internal server error: {e}", err_type="server_error"),
+                    _openai_error(
+                        f"Internal server error: {e}", err_type="server_error"
+                    ),
                     status=500,
                 )
 
@@ -594,11 +812,22 @@ class APIServerAdapter(BasePlatformAdapter):
         if not final_response:
             final_response = result.get("error", "(No response generated)")
 
+        # Log delegation completion (session already has response via agent run)
+        if (
+            delegation_headers["is_delegation"]
+            and delegation_headers["source_profile"]
+            and delegation_headers["task_id"]
+        ):
+            logger.info(
+                f"Completed delegation {delegation_headers['task_id']} from {delegation_headers['source_profile']}"
+            )
+
         response_data = {
             "id": completion_id,
             "object": "chat.completion",
             "created": created,
             "model": model_name,
+            "session_id": session_id,  # Include session_id for delegation tracking
             "choices": [
                 {
                     "index": 0,
@@ -616,11 +845,17 @@ class APIServerAdapter(BasePlatformAdapter):
             },
         }
 
-        return web.json_response(response_data, headers={"X-Hermes-Session-Id": session_id})
+        return web.json_response(response_data)
 
     async def _write_sse_chat_completion(
-        self, request: "web.Request", completion_id: str, model: str,
-        created: int, stream_q, agent_task, agent_ref=None, session_id: str = None,
+        self,
+        request: "web.Request",
+        completion_id: str,
+        model: str,
+        created: int,
+        stream_q,
+        agent_task,
+        agent_ref=None,
     ) -> "web.StreamResponse":
         """Write real streaming SSE from agent's stream_delta_callback queue.
 
@@ -637,17 +872,19 @@ class APIServerAdapter(BasePlatformAdapter):
         cors = self._cors_headers_for_origin(origin) if origin else None
         if cors:
             sse_headers.update(cors)
-        if session_id:
-            sse_headers["X-Hermes-Session-Id"] = session_id
         response = web.StreamResponse(status=200, headers=sse_headers)
         await response.prepare(request)
 
         try:
             # Role chunk
             role_chunk = {
-                "id": completion_id, "object": "chat.completion.chunk",
-                "created": created, "model": model,
-                "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}
+                ],
             }
             await response.write(f"data: {json.dumps(role_chunk)}\n\n".encode())
 
@@ -655,7 +892,9 @@ class APIServerAdapter(BasePlatformAdapter):
             loop = asyncio.get_event_loop()
             while True:
                 try:
-                    delta = await loop.run_in_executor(None, lambda: stream_q.get(timeout=0.5))
+                    delta = await loop.run_in_executor(
+                        None, lambda: stream_q.get(timeout=0.5)
+                    )
                 except _q.Empty:
                     if agent_task.done():
                         # Drain any remaining items
@@ -665,11 +904,21 @@ class APIServerAdapter(BasePlatformAdapter):
                                 if delta is None:
                                     break
                                 content_chunk = {
-                                    "id": completion_id, "object": "chat.completion.chunk",
-                                    "created": created, "model": model,
-                                    "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
+                                    "id": completion_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": model,
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {"content": delta},
+                                            "finish_reason": None,
+                                        }
+                                    ],
                                 }
-                                await response.write(f"data: {json.dumps(content_chunk)}\n\n".encode())
+                                await response.write(
+                                    f"data: {json.dumps(content_chunk)}\n\n".encode()
+                                )
                             except _q.Empty:
                                 break
                         break
@@ -679,9 +928,13 @@ class APIServerAdapter(BasePlatformAdapter):
                     break
 
                 content_chunk = {
-                    "id": completion_id, "object": "chat.completion.chunk",
-                    "created": created, "model": model,
-                    "choices": [{"index": 0, "delta": {"content": delta}, "finish_reason": None}],
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model,
+                    "choices": [
+                        {"index": 0, "delta": {"content": delta}, "finish_reason": None}
+                    ],
                 }
                 await response.write(f"data: {json.dumps(content_chunk)}\n\n".encode())
 
@@ -695,8 +948,10 @@ class APIServerAdapter(BasePlatformAdapter):
 
             # Finish chunk
             finish_chunk = {
-                "id": completion_id, "object": "chat.completion.chunk",
-                "created": created, "model": model,
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model,
                 "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
                 "usage": {
                     "prompt_tokens": usage.get("input_tokens", 0),
@@ -722,7 +977,9 @@ class APIServerAdapter(BasePlatformAdapter):
                     await agent_task
                 except (asyncio.CancelledError, Exception):
                     pass
-            logger.info("SSE client disconnected; interrupted agent task %s", completion_id)
+            logger.info(
+                "SSE client disconnected; interrupted agent task %s", completion_id
+            )
 
         return response
 
@@ -737,7 +994,12 @@ class APIServerAdapter(BasePlatformAdapter):
             body = await request.json()
         except (json.JSONDecodeError, Exception):
             return web.json_response(
-                {"error": {"message": "Invalid JSON in request body", "type": "invalid_request_error"}},
+                {
+                    "error": {
+                        "message": "Invalid JSON in request body",
+                        "type": "invalid_request_error",
+                    }
+                },
                 status=400,
             )
 
@@ -752,7 +1014,12 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # conversation and previous_response_id are mutually exclusive
         if conversation and previous_response_id:
-            return web.json_response(_openai_error("Cannot use both 'conversation' and 'previous_response_id'"), status=400)
+            return web.json_response(
+                _openai_error(
+                    "Cannot use both 'conversation' and 'previous_response_id'"
+                ),
+                status=400,
+            )
 
         # Resolve conversation name to latest response_id
         if conversation:
@@ -774,23 +1041,36 @@ class APIServerAdapter(BasePlatformAdapter):
                     if isinstance(content, list):
                         text_parts = []
                         for part in content:
-                            if isinstance(part, dict) and part.get("type") == "input_text":
+                            if (
+                                isinstance(part, dict)
+                                and part.get("type") == "input_text"
+                            ):
                                 text_parts.append(part.get("text", ""))
-                            elif isinstance(part, dict) and part.get("type") == "output_text":
+                            elif (
+                                isinstance(part, dict)
+                                and part.get("type") == "output_text"
+                            ):
                                 text_parts.append(part.get("text", ""))
                             elif isinstance(part, str):
                                 text_parts.append(part)
                         content = "\n".join(text_parts)
                     input_messages.append({"role": role, "content": content})
         else:
-            return web.json_response(_openai_error("'input' must be a string or array"), status=400)
+            return web.json_response(
+                _openai_error("'input' must be a string or array"), status=400
+            )
 
         # Reconstruct conversation history from previous_response_id
         conversation_history: List[Dict[str, str]] = []
         if previous_response_id:
             stored = self._response_store.get(previous_response_id)
             if stored is None:
-                return web.json_response(_openai_error(f"Previous response not found: {previous_response_id}"), status=404)
+                return web.json_response(
+                    _openai_error(
+                        f"Previous response not found: {previous_response_id}"
+                    ),
+                    status=404,
+                )
             conversation_history = list(stored.get("conversation_history", []))
             # If no instructions provided, carry forward from previous
             if instructions is None:
@@ -803,7 +1083,9 @@ class APIServerAdapter(BasePlatformAdapter):
         # Last input message is the user_message
         user_message = input_messages[-1].get("content", "") if input_messages else ""
         if not user_message:
-            return web.json_response(_openai_error("No user message found in input"), status=400)
+            return web.json_response(
+                _openai_error("No user message found in input"), status=400
+            )
 
         # Truncation support
         if body.get("truncation") == "auto" and len(conversation_history) > 100:
@@ -818,20 +1100,33 @@ class APIServerAdapter(BasePlatformAdapter):
                 conversation_history=conversation_history,
                 ephemeral_system_prompt=instructions,
                 session_id=session_id,
+                delegate_depth=0,
+                is_delegation=False,
             )
 
         idempotency_key = request.headers.get("Idempotency-Key")
         if idempotency_key:
             fp = _make_request_fingerprint(
                 body,
-                keys=["input", "instructions", "previous_response_id", "conversation", "model", "tools"],
+                keys=[
+                    "input",
+                    "instructions",
+                    "previous_response_id",
+                    "conversation",
+                    "model",
+                    "tools",
+                ],
             )
             try:
-                result, usage = await _idem_cache.get_or_set(idempotency_key, fp, _compute_response)
+                result, usage = await _idem_cache.get_or_set(
+                    idempotency_key, fp, _compute_response
+                )
             except Exception as e:
                 logger.error("Error running agent for responses: %s", e, exc_info=True)
                 return web.json_response(
-                    _openai_error(f"Internal server error: {e}", err_type="server_error"),
+                    _openai_error(
+                        f"Internal server error: {e}", err_type="server_error"
+                    ),
                     status=500,
                 )
         else:
@@ -840,7 +1135,9 @@ class APIServerAdapter(BasePlatformAdapter):
             except Exception as e:
                 logger.error("Error running agent for responses: %s", e, exc_info=True)
                 return web.json_response(
-                    _openai_error(f"Internal server error: {e}", err_type="server_error"),
+                    _openai_error(
+                        f"Internal server error: {e}", err_type="server_error"
+                    ),
                     status=500,
                 )
 
@@ -881,11 +1178,14 @@ class APIServerAdapter(BasePlatformAdapter):
 
         # Store the complete response object for future chaining / GET retrieval
         if store:
-            self._response_store.put(response_id, {
-                "response": response_data,
-                "conversation_history": full_history,
-                "instructions": instructions,
-            })
+            self._response_store.put(
+                response_id,
+                {
+                    "response": response_data,
+                    "conversation_history": full_history,
+                    "instructions": instructions,
+                },
+            )
             # Update conversation mapping so the next request with the same
             # conversation name automatically chains to this response
             if conversation:
@@ -906,7 +1206,9 @@ class APIServerAdapter(BasePlatformAdapter):
         response_id = request.match_info["response_id"]
         stored = self._response_store.get(response_id)
         if stored is None:
-            return web.json_response(_openai_error(f"Response not found: {response_id}"), status=404)
+            return web.json_response(
+                _openai_error(f"Response not found: {response_id}"), status=404
+            )
 
         return web.json_response(stored["response"])
 
@@ -919,13 +1221,17 @@ class APIServerAdapter(BasePlatformAdapter):
         response_id = request.match_info["response_id"]
         deleted = self._response_store.delete(response_id)
         if not deleted:
-            return web.json_response(_openai_error(f"Response not found: {response_id}"), status=404)
+            return web.json_response(
+                _openai_error(f"Response not found: {response_id}"), status=404
+            )
 
-        return web.json_response({
-            "id": response_id,
-            "object": "response",
-            "deleted": True,
-        })
+        return web.json_response(
+            {
+                "id": response_id,
+                "object": "response",
+                "deleted": True,
+            }
+        )
 
     # ------------------------------------------------------------------
     # Cron jobs API
@@ -944,13 +1250,23 @@ class APIServerAdapter(BasePlatformAdapter):
             resume_job as _cron_resume,
             trigger_job as _cron_trigger,
         )
+
         _CRON_AVAILABLE = True
     except ImportError:
         pass
 
     _JOB_ID_RE = __import__("re").compile(r"[a-f0-9]{12}")
     # Allowed fields for update — prevents clients injecting arbitrary keys
-    _UPDATE_ALLOWED_FIELDS = {"name", "schedule", "prompt", "deliver", "skills", "skill", "repeat", "enabled"}
+    _UPDATE_ALLOWED_FIELDS = {
+        "name",
+        "schedule",
+        "prompt",
+        "deliver",
+        "skills",
+        "skill",
+        "repeat",
+        "enabled",
+    }
     _MAX_NAME_LENGTH = 200
     _MAX_PROMPT_LENGTH = 5000
 
@@ -958,7 +1274,8 @@ class APIServerAdapter(BasePlatformAdapter):
         """Return error response if cron module isn't available."""
         if not self._CRON_AVAILABLE:
             return web.json_response(
-                {"error": "Cron module not available"}, status=501,
+                {"error": "Cron module not available"},
+                status=501,
             )
         return None
 
@@ -967,7 +1284,8 @@ class APIServerAdapter(BasePlatformAdapter):
         job_id = request.match_info["job_id"]
         if not self._JOB_ID_RE.fullmatch(job_id):
             return job_id, web.json_response(
-                {"error": "Invalid job ID format"}, status=400,
+                {"error": "Invalid job ID format"},
+                status=400,
             )
         return job_id, None
 
@@ -980,7 +1298,10 @@ class APIServerAdapter(BasePlatformAdapter):
         if cron_err:
             return cron_err
         try:
-            include_disabled = request.query.get("include_disabled", "").lower() in ("true", "1")
+            include_disabled = request.query.get("include_disabled", "").lower() in (
+                "true",
+                "1",
+            )
             jobs = self._cron_list(include_disabled=include_disabled)
             return web.json_response({"jobs": jobs})
         except Exception as e:
@@ -1007,16 +1328,20 @@ class APIServerAdapter(BasePlatformAdapter):
                 return web.json_response({"error": "Name is required"}, status=400)
             if len(name) > self._MAX_NAME_LENGTH:
                 return web.json_response(
-                    {"error": f"Name must be ≤ {self._MAX_NAME_LENGTH} characters"}, status=400,
+                    {"error": f"Name must be ≤ {self._MAX_NAME_LENGTH} characters"},
+                    status=400,
                 )
             if not schedule:
                 return web.json_response({"error": "Schedule is required"}, status=400)
             if len(prompt) > self._MAX_PROMPT_LENGTH:
                 return web.json_response(
-                    {"error": f"Prompt must be ≤ {self._MAX_PROMPT_LENGTH} characters"}, status=400,
+                    {"error": f"Prompt must be ≤ {self._MAX_PROMPT_LENGTH} characters"},
+                    status=400,
                 )
             if repeat is not None and (not isinstance(repeat, int) or repeat < 1):
-                return web.json_response({"error": "Repeat must be a positive integer"}, status=400)
+                return web.json_response(
+                    {"error": "Repeat must be a positive integer"}, status=400
+                )
 
             kwargs = {
                 "prompt": prompt,
@@ -1067,17 +1392,26 @@ class APIServerAdapter(BasePlatformAdapter):
         try:
             body = await request.json()
             # Whitelist allowed fields to prevent arbitrary key injection
-            sanitized = {k: v for k, v in body.items() if k in self._UPDATE_ALLOWED_FIELDS}
+            sanitized = {
+                k: v for k, v in body.items() if k in self._UPDATE_ALLOWED_FIELDS
+            }
             if not sanitized:
-                return web.json_response({"error": "No valid fields to update"}, status=400)
+                return web.json_response(
+                    {"error": "No valid fields to update"}, status=400
+                )
             # Validate lengths if present
             if "name" in sanitized and len(sanitized["name"]) > self._MAX_NAME_LENGTH:
                 return web.json_response(
-                    {"error": f"Name must be ≤ {self._MAX_NAME_LENGTH} characters"}, status=400,
+                    {"error": f"Name must be ≤ {self._MAX_NAME_LENGTH} characters"},
+                    status=400,
                 )
-            if "prompt" in sanitized and len(sanitized["prompt"]) > self._MAX_PROMPT_LENGTH:
+            if (
+                "prompt" in sanitized
+                and len(sanitized["prompt"]) > self._MAX_PROMPT_LENGTH
+            ):
                 return web.json_response(
-                    {"error": f"Prompt must be ≤ {self._MAX_PROMPT_LENGTH} characters"}, status=400,
+                    {"error": f"Prompt must be ≤ {self._MAX_PROMPT_LENGTH} characters"},
+                    status=400,
                 )
             job = self._cron_update(job_id, sanitized)
             if not job:
@@ -1184,34 +1518,40 @@ class APIServerAdapter(BasePlatformAdapter):
             if role == "assistant" and msg.get("tool_calls"):
                 for tc in msg["tool_calls"]:
                     func = tc.get("function", {})
-                    items.append({
-                        "type": "function_call",
-                        "name": func.get("name", ""),
-                        "arguments": func.get("arguments", ""),
-                        "call_id": tc.get("id", ""),
-                    })
+                    items.append(
+                        {
+                            "type": "function_call",
+                            "name": func.get("name", ""),
+                            "arguments": func.get("arguments", ""),
+                            "call_id": tc.get("id", ""),
+                        }
+                    )
             elif role == "tool":
-                items.append({
-                    "type": "function_call_output",
-                    "call_id": msg.get("tool_call_id", ""),
-                    "output": msg.get("content", ""),
-                })
+                items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": msg.get("tool_call_id", ""),
+                        "output": msg.get("content", ""),
+                    }
+                )
 
         # Final assistant message
         final = result.get("final_response", "")
         if not final:
             final = result.get("error", "(No response generated)")
 
-        items.append({
-            "type": "message",
-            "role": "assistant",
-            "content": [
-                {
-                    "type": "output_text",
-                    "text": final,
-                }
-            ],
-        })
+        items.append(
+            {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": final,
+                    }
+                ],
+            }
+        )
         return items
 
     # ------------------------------------------------------------------
@@ -1227,6 +1567,8 @@ class APIServerAdapter(BasePlatformAdapter):
         stream_delta_callback=None,
         tool_progress_callback=None,
         agent_ref: Optional[list] = None,
+        delegate_depth: int = 0,
+        is_delegation: bool = False,
     ) -> tuple:
         """
         Create an agent and run a conversation in a thread executor.
@@ -1247,6 +1589,9 @@ class APIServerAdapter(BasePlatformAdapter):
                 session_id=session_id,
                 stream_delta_callback=stream_delta_callback,
                 tool_progress_callback=tool_progress_callback,
+                delegate_depth=delegate_depth,
+                skip_memory=is_delegation,
+                is_delegation=is_delegation,
             )
             if agent_ref is not None:
                 agent_ref[0] = agent
@@ -1264,6 +1609,75 @@ class APIServerAdapter(BasePlatformAdapter):
         return await loop.run_in_executor(None, _run)
 
     # ------------------------------------------------------------------
+    # Persistent child session creation (OhMyOpenCode-style)
+    # ------------------------------------------------------------------
+
+    def _create_child_session(
+        self,
+        source_profile: str,
+        task_id: str,
+        target_profile: str,
+        initial_message: str,
+    ) -> str:
+        """
+        Create a persistent child session for cross-profile delegation.
+
+        OhMyOpenCode-style session persistence: the worker profile creates
+        a dedicated session for each delegation, linked to the source profile
+        via parent_session_id. This enables direct session querying later.
+
+        Args:
+            source_profile: Profile that initiated the delegation (parent)
+            task_id: Unique task identifier
+            target_profile: Profile processing the delegation (self)
+            initial_message: The initial user message/question
+
+        Returns:
+            session_id: The created child session ID
+        """
+        import uuid
+        import time
+
+        child_session_id = (
+            f"delegated-{source_profile}-{task_id}-{uuid.uuid4().hex[:8]}"
+        )
+
+        try:
+            from hermes_state import SessionDB
+
+            # Initialize session DB for the current profile
+            db = SessionDB()
+
+            # Create session to track this delegation
+            db.create_session(
+                session_id=child_session_id,
+                source=f"delegation:{source_profile}:{task_id}",
+                model="hermes-agent",
+                model_config={},
+                system_prompt=None,
+                user_id=source_profile,
+                parent_session_id=None,  # No parent - this IS the root delegation session
+            )
+
+            # Store initial message as first conversation entry
+            db.append_message(
+                session_id=child_session_id,
+                role="user",
+                content=initial_message,
+            )
+
+            logger.info(
+                f"Created persistent child session {child_session_id} "
+                f"for delegation from {source_profile} to {target_profile}"
+            )
+            return child_session_id
+
+        except Exception as e:
+            logger.error(f"Failed to create child session: {e}")
+            # Fallback to simple UUID if session creation fails
+            return str(uuid.uuid4())
+
+    # ------------------------------------------------------------------
     # BasePlatformAdapter interface
     # ------------------------------------------------------------------
 
@@ -1274,33 +1688,56 @@ class APIServerAdapter(BasePlatformAdapter):
             return False
 
         try:
-            mws = [mw for mw in (cors_middleware, body_limit_middleware, security_headers_middleware) if mw is not None]
+            mws = [
+                mw
+                for mw in (
+                    cors_middleware,
+                    body_limit_middleware,
+                    security_headers_middleware,
+                )
+                if mw is not None
+            ]
             self._app = web.Application(middlewares=mws)
             self._app["api_server_adapter"] = self
             self._app.router.add_get("/health", self._handle_health)
             self._app.router.add_get("/v1/health", self._handle_health)
             self._app.router.add_get("/v1/models", self._handle_models)
-            self._app.router.add_post("/v1/chat/completions", self._handle_chat_completions)
+            self._app.router.add_post(
+                "/v1/chat/completions", self._handle_chat_completions
+            )
             self._app.router.add_post("/v1/responses", self._handle_responses)
-            self._app.router.add_get("/v1/responses/{response_id}", self._handle_get_response)
-            self._app.router.add_delete("/v1/responses/{response_id}", self._handle_delete_response)
+            self._app.router.add_get(
+                "/v1/responses/{response_id}", self._handle_get_response
+            )
+            self._app.router.add_delete(
+                "/v1/responses/{response_id}", self._handle_delete_response
+            )
             # Cron jobs management API
             self._app.router.add_get("/api/jobs", self._handle_list_jobs)
             self._app.router.add_post("/api/jobs", self._handle_create_job)
             self._app.router.add_get("/api/jobs/{job_id}", self._handle_get_job)
             self._app.router.add_patch("/api/jobs/{job_id}", self._handle_update_job)
             self._app.router.add_delete("/api/jobs/{job_id}", self._handle_delete_job)
-            self._app.router.add_post("/api/jobs/{job_id}/pause", self._handle_pause_job)
-            self._app.router.add_post("/api/jobs/{job_id}/resume", self._handle_resume_job)
+            self._app.router.add_post(
+                "/api/jobs/{job_id}/pause", self._handle_pause_job
+            )
+            self._app.router.add_post(
+                "/api/jobs/{job_id}/resume", self._handle_resume_job
+            )
             self._app.router.add_post("/api/jobs/{job_id}/run", self._handle_run_job)
 
             # Port conflict detection — fail fast if port is already in use
             import socket as _socket
+
             try:
                 with _socket.socket(_socket.AF_INET, _socket.SOCK_STREAM) as _s:
                     _s.settimeout(1)
-                    _s.connect(('127.0.0.1', self._port))
-                logger.error('[%s] Port %d already in use. Set a different port in config.yaml: platforms.api_server.port', self.name, self._port)
+                    _s.connect(("127.0.0.1", self._port))
+                logger.error(
+                    "[%s] Port %d already in use. Set a different port in config.yaml: platforms.api_server.port",
+                    self.name,
+                    self._port,
+                )
                 return False
             except (ConnectionRefusedError, OSError):
                 pass  # port is free
@@ -1313,7 +1750,9 @@ class APIServerAdapter(BasePlatformAdapter):
             self._mark_connected()
             logger.info(
                 "[%s] API server listening on http://%s:%d",
-                self.name, self._host, self._port,
+                self.name,
+                self._host,
+                self._port,
             )
             return True
 
@@ -1343,7 +1782,9 @@ class APIServerAdapter(BasePlatformAdapter):
         """
         Not used — HTTP request/response cycle handles delivery directly.
         """
-        return SendResult(success=False, error="API server uses HTTP request/response, not send()")
+        return SendResult(
+            success=False, error="API server uses HTTP request/response, not send()"
+        )
 
     async def get_chat_info(self, chat_id: str) -> Dict[str, Any]:
         """Return basic info about the API server."""
