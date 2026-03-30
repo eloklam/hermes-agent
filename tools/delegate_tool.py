@@ -18,6 +18,7 @@ never the child's intermediate tool calls or reasoning.
 
 import json
 import logging
+
 logger = logging.getLogger(__name__)
 import os
 import time
@@ -26,13 +27,15 @@ from typing import Any, Dict, List, Optional
 
 
 # Tools that children must never have access to
-DELEGATE_BLOCKED_TOOLS = frozenset([
-    "delegate_task",   # no recursive delegation
-    "clarify",         # no user interaction
-    "memory",          # no writes to shared MEMORY.md
-    "send_message",    # no cross-platform side effects
-    "execute_code",    # children should reason step-by-step, not write scripts
-])
+DELEGATE_BLOCKED_TOOLS = frozenset(
+    [
+        "delegate_task",  # no recursive delegation
+        "clarify",  # no user interaction
+        "memory",  # no writes to shared MEMORY.md
+        "send_message",  # no cross-platform side effects
+        "execute_code",  # children should reason step-by-step, not write scripts
+    ]
+)
 
 MAX_CONCURRENT_CHILDREN = 3
 MAX_DEPTH = 2  # parent (0) -> child (1) -> grandchild rejected (2)
@@ -70,12 +73,17 @@ def _build_child_system_prompt(goal: str, context: Optional[str] = None) -> str:
 def _strip_blocked_tools(toolsets: List[str]) -> List[str]:
     """Remove toolsets that contain only blocked tools."""
     blocked_toolset_names = {
-        "delegation", "clarify", "memory", "code_execution",
+        "delegation",
+        "clarify",
+        "memory",
+        "code_execution",
     }
     return [t for t in toolsets if t not in blocked_toolset_names]
 
 
-def _build_child_progress_callback(task_index: int, parent_agent, task_count: int = 1) -> Optional[callable]:
+def _build_child_progress_callback(
+    task_index: int, parent_agent, task_count: int = 1
+) -> Optional[callable]:
     """Build a callback that relays child agent tool calls to the parent display.
 
     Two display paths:
@@ -85,8 +93,8 @@ def _build_child_progress_callback(task_index: int, parent_agent, task_count: in
     Returns None if no display mechanism is available, in which case the
     child agent runs with no progress callback (identical to current behavior).
     """
-    spinner = getattr(parent_agent, '_delegate_spinner', None)
-    parent_cb = getattr(parent_agent, 'tool_progress_callback', None)
+    spinner = getattr(parent_agent, "_delegate_spinner", None)
+    parent_cb = getattr(parent_agent, "tool_progress_callback", None)
 
     if not spinner and not parent_cb:
         return None  # No display → no callback → zero behavior change
@@ -102,9 +110,13 @@ def _build_child_progress_callback(task_index: int, parent_agent, task_count: in
         # Special "_thinking" event: model produced text content (reasoning)
         if tool_name == "_thinking":
             if spinner:
-                short = (preview[:55] + "...") if preview and len(preview) > 55 else (preview or "")
+                short = (
+                    (preview[:55] + "...")
+                    if preview and len(preview) > 55
+                    else (preview or "")
+                )
                 try:
-                    spinner.print_above(f" {prefix}├─ 💭 \"{short}\"")
+                    spinner.print_above(f' {prefix}├─ 💭 "{short}"')
                 except Exception as e:
                     logger.debug("Spinner print_above failed: %s", e)
             # Don't relay thinking to gateway (too noisy for chat)
@@ -112,12 +124,17 @@ def _build_child_progress_callback(task_index: int, parent_agent, task_count: in
 
         # Regular tool call event
         if spinner:
-            short = (preview[:35] + "...") if preview and len(preview) > 35 else (preview or "")
+            short = (
+                (preview[:35] + "...")
+                if preview and len(preview) > 35
+                else (preview or "")
+            )
             from agent.display import get_tool_emoji
+
             emoji = get_tool_emoji(tool_name)
             line = f" {prefix}├─ {emoji} {tool_name}"
             if short:
-                line += f"  \"{short}\""
+                line += f'  "{short}"'
             try:
                 spinner.print_above(line)
             except Exception as e:
@@ -174,10 +191,14 @@ def _build_child_agent(
 
     # When no explicit toolsets given, inherit from parent's enabled toolsets
     # so disabled tools (e.g. web) don't leak to subagents.
-    parent_toolsets = set(getattr(parent_agent, "enabled_toolsets", None) or DEFAULT_TOOLSETS)
+    parent_toolsets = set(
+        getattr(parent_agent, "enabled_toolsets", None) or DEFAULT_TOOLSETS
+    )
     if toolsets:
         # Intersect with parent — subagent must not gain tools the parent lacks
-        child_toolsets = _strip_blocked_tools([t for t in toolsets if t in parent_toolsets])
+        child_toolsets = _strip_blocked_tools(
+            [t for t in toolsets if t in parent_toolsets]
+        )
     elif parent_agent and getattr(parent_agent, "enabled_toolsets", None):
         child_toolsets = _strip_blocked_tools(parent_agent.enabled_toolsets)
     else:
@@ -226,7 +247,7 @@ def _build_child_agent(
         skip_context_files=True,
         skip_memory=True,
         clarify_callback=None,
-        session_db=getattr(parent_agent, '_session_db', None),
+        session_db=getattr(parent_agent, "_session_db", None),
         providers_allowed=parent_agent.providers_allowed,
         providers_ignored=parent_agent.providers_ignored,
         providers_order=parent_agent.providers_order,
@@ -235,11 +256,11 @@ def _build_child_agent(
         iteration_budget=None,  # fresh budget per subagent
     )
     # Set delegation depth so children can't spawn grandchildren
-    child._delegate_depth = getattr(parent_agent, '_delegate_depth', 0) + 1
+    child._delegate_depth = getattr(parent_agent, "_delegate_depth", 0) + 1
 
     # Register child for interrupt propagation
-    if hasattr(parent_agent, '_active_children'):
-        lock = getattr(parent_agent, '_active_children_lock', None)
+    if hasattr(parent_agent, "_active_children"):
+        lock = getattr(parent_agent, "_active_children_lock", None)
         if lock:
             with lock:
                 parent_agent._active_children.append(child)
@@ -247,6 +268,7 @@ def _build_child_agent(
             parent_agent._active_children.append(child)
 
     return child
+
 
 def _run_single_child(
     task_index: int,
@@ -262,19 +284,21 @@ def _run_single_child(
     child_start = time.monotonic()
 
     # Get the progress callback from the child agent
-    child_progress_cb = getattr(child, 'tool_progress_callback', None)
+    child_progress_cb = getattr(child, "tool_progress_callback", None)
 
     # Restore parent tool names using the value saved before child construction
     # mutated the global. This is the correct parent toolset, not the child's.
     import model_tools
-    _saved_tool_names = getattr(child, "_delegate_saved_tool_names",
-                                list(model_tools._last_resolved_tool_names))
+
+    _saved_tool_names = getattr(
+        child, "_delegate_saved_tool_names", list(model_tools._last_resolved_tool_names)
+    )
 
     try:
         result = child.run_conversation(user_message=goal)
 
         # Flush any remaining batched progress to gateway
-        if child_progress_cb and hasattr(child_progress_cb, '_flush'):
+        if child_progress_cb and hasattr(child_progress_cb, "_flush"):
             try:
                 child_progress_cb._flush()
             except Exception as e:
@@ -307,7 +331,7 @@ def _run_single_child(
                 if not isinstance(msg, dict):
                     continue
                 if msg.get("role") == "assistant":
-                    for tc in (msg.get("tool_calls") or []):
+                    for tc in msg.get("tool_calls") or []:
                         fn = tc.get("function", {})
                         entry_t = {
                             "tool": fn.get("name", "unknown"),
@@ -319,9 +343,7 @@ def _run_single_child(
                             trace_by_id[tc_id] = entry_t
                 elif msg.get("role") == "tool":
                     content = msg.get("content", "")
-                    is_error = bool(
-                        content and "error" in content[:80].lower()
-                    )
+                    is_error = bool(content and "error" in content[:80].lower())
                     result_meta = {
                         "result_bytes": len(content),
                         "status": "error" if is_error else "ok",
@@ -357,8 +379,12 @@ def _run_single_child(
             "model": _model if isinstance(_model, str) else None,
             "exit_reason": exit_reason,
             "tokens": {
-                "input": _input_tokens if isinstance(_input_tokens, (int, float)) else 0,
-                "output": _output_tokens if isinstance(_output_tokens, (int, float)) else 0,
+                "input": _input_tokens
+                if isinstance(_input_tokens, (int, float))
+                else 0,
+                "output": _output_tokens
+                if isinstance(_output_tokens, (int, float))
+                else 0,
             },
             "tool_trace": tool_trace,
         }
@@ -389,9 +415,9 @@ def _run_single_child(
             model_tools._last_resolved_tool_names = list(saved_tool_names)
 
         # Unregister child from interrupt propagation
-        if hasattr(parent_agent, '_active_children'):
+        if hasattr(parent_agent, "_active_children"):
             try:
-                lock = getattr(parent_agent, '_active_children_lock', None)
+                lock = getattr(parent_agent, "_active_children_lock", None)
                 if lock:
                     with lock:
                         parent_agent._active_children.remove(child)
@@ -399,6 +425,7 @@ def _run_single_child(
                     parent_agent._active_children.remove(child)
             except (ValueError, UnboundLocalError) as e:
                 logger.debug("Could not remove child from active_children: %s", e)
+
 
 def delegate_task(
     goal: Optional[str] = None,
@@ -421,14 +448,16 @@ def delegate_task(
         return json.dumps({"error": "delegate_task requires a parent agent context."})
 
     # Depth limit
-    depth = getattr(parent_agent, '_delegate_depth', 0)
+    depth = getattr(parent_agent, "_delegate_depth", 0)
     if depth >= MAX_DEPTH:
-        return json.dumps({
-            "error": (
-                f"Delegation depth limit reached ({MAX_DEPTH}). "
-                "Subagents cannot spawn further subagents."
-            )
-        })
+        return json.dumps(
+            {
+                "error": (
+                    f"Delegation depth limit reached ({MAX_DEPTH}). "
+                    "Subagents cannot spawn further subagents."
+                )
+            }
+        )
 
     # Load config
     cfg = _load_config()
@@ -451,7 +480,9 @@ def delegate_task(
     elif goal and isinstance(goal, str) and goal.strip():
         task_list = [{"goal": goal, "context": context, "toolsets": toolsets}]
     else:
-        return json.dumps({"error": "Provide either 'goal' (single task) or 'tasks' (batch)."})
+        return json.dumps(
+            {"error": "Provide either 'goal' (single task) or 'tasks' (batch)."}
+        )
 
     if not task_list:
         return json.dumps({"error": "No tasks provided."})
@@ -472,6 +503,7 @@ def delegate_task(
     # _build_child_agent() calls AIAgent() which calls get_tool_definitions(),
     # which overwrites model_tools._last_resolved_tool_names with child's toolset.
     import model_tools as _model_tools
+
     _parent_tool_names = list(_model_tools._last_resolved_tool_names)
 
     # Build all child agents on the main thread (thread-safe construction)
@@ -481,10 +513,15 @@ def delegate_task(
     try:
         for i, t in enumerate(task_list):
             child = _build_child_agent(
-                task_index=i, goal=t["goal"], context=t.get("context"),
-                toolsets=t.get("toolsets") or toolsets, model=creds["model"],
-                max_iterations=effective_max_iter, parent_agent=parent_agent,
-                override_provider=creds["provider"], override_base_url=creds["base_url"],
+                task_index=i,
+                goal=t["goal"],
+                context=t.get("context"),
+                toolsets=t.get("toolsets") or toolsets,
+                model=creds["model"],
+                max_iterations=effective_max_iter,
+                parent_agent=parent_agent,
+                override_provider=creds["provider"],
+                override_base_url=creds["base_url"],
                 override_api_key=creds["api_key"],
                 override_api_mode=creds["api_mode"],
             )
@@ -503,7 +540,7 @@ def delegate_task(
     else:
         # Batch -- run in parallel with per-task progress lines
         completed_count = 0
-        spinner_ref = getattr(parent_agent, '_delegate_spinner', None)
+        spinner_ref = getattr(parent_agent, "_delegate_spinner", None)
 
         with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_CHILDREN) as executor:
             futures = {}
@@ -540,7 +577,7 @@ def delegate_task(
                 status = entry.get("status", "?")
                 icon = "✓" if status == "completed" else "✗"
                 remaining = n_tasks - completed_count
-                completion_line = f"{icon} [{idx+1}/{n_tasks}] {label}  ({dur}s)"
+                completion_line = f"{icon} [{idx + 1}/{n_tasks}] {label}  ({dur}s)"
                 if spinner_ref:
                     try:
                         spinner_ref.print_above(completion_line)
@@ -552,7 +589,9 @@ def delegate_task(
                 # Update spinner text to show remaining count
                 if spinner_ref and remaining > 0:
                     try:
-                        spinner_ref.update_text(f"🔀 {remaining} task{'s' if remaining != 1 else ''} remaining")
+                        spinner_ref.update_text(
+                            f"🔀 {remaining} task{'s' if remaining != 1 else ''} remaining"
+                        )
                     except Exception as e:
                         logger.debug("Spinner update_text failed: %s", e)
 
@@ -561,10 +600,13 @@ def delegate_task(
 
     total_duration = round(time.monotonic() - overall_start, 2)
 
-    return json.dumps({
-        "results": results,
-        "total_duration_seconds": total_duration,
-    }, ensure_ascii=False)
+    return json.dumps(
+        {
+            "results": results,
+            "total_duration_seconds": total_duration,
+        },
+        ensure_ascii=False,
+    )
 
 
 def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
@@ -588,10 +630,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     configured_api_key = str(cfg.get("api_key") or "").strip() or None
 
     if configured_base_url:
-        api_key = (
-            configured_api_key
-            or os.getenv("OPENAI_API_KEY", "").strip()
-        )
+        api_key = configured_api_key or os.getenv("OPENAI_API_KEY", "").strip()
         if not api_key:
             raise ValueError(
                 "Delegation base_url is configured but no API key was found. "
@@ -629,6 +668,7 @@ def _resolve_delegation_credentials(cfg: dict, parent_agent) -> dict:
     # Provider is configured — resolve full credentials
     try:
         from hermes_cli.runtime_provider import resolve_runtime_provider
+
         runtime = resolve_runtime_provider(requested=configured_provider)
     except Exception as exc:
         raise ValueError(
@@ -666,6 +706,7 @@ def _load_config() -> dict:
     """
     try:
         from cli import CLI_CONFIG
+
         cfg = CLI_CONFIG.get("delegation", {})
         if cfg:
             return cfg
@@ -673,6 +714,7 @@ def _load_config() -> dict:
         pass
     try:
         from hermes_cli.config import load_config
+
         full = load_config()
         return full.get("delegation", {})
     except Exception:
@@ -686,10 +728,15 @@ def _load_config() -> dict:
 DELEGATE_TASK_SCHEMA = {
     "name": "delegate_task",
     "description": (
-        "Spawn one or more subagents to work on tasks in isolated contexts. "
-        "Each subagent gets its own conversation, terminal session, and toolset. "
+        "Spawn temporary ONE-OFF subagents to work on tasks in isolated contexts. "
+        "Each subagent gets its own conversation, terminal session, and toolset, "
+        "but shares the SAME HERMES_HOME as you. "
         "Only the final summary is returned -- intermediate tool results "
         "never enter your context window.\n\n"
+        "CRITICAL: For cross-profile orchestration (delegating to named profiles like "
+        "'coder', 'researcher'), use profile_delegate INSTEAD of this tool. "
+        "delegate_task creates temporary subagents; profile_delegate connects to "
+        "persistent profile workers with separate HERMES_HOME directories.\n\n"
         "TWO MODES (one of 'goal' or 'tasks' is required):\n"
         "1. Single task: provide 'goal' (+ optional context, toolsets)\n"
         "2. Batch (parallel): provide 'tasks' array with up to 3 items. "
@@ -697,8 +744,10 @@ DELEGATE_TASK_SCHEMA = {
         "WHEN TO USE delegate_task:\n"
         "- Reasoning-heavy subtasks (debugging, code review, research synthesis)\n"
         "- Tasks that would flood your context with intermediate data\n"
-        "- Parallel independent workstreams (research A and B simultaneously)\n\n"
+        "- Parallel independent workstreams (research A and B simultaneously)\n"
+        "- Temporary subagents that don't need persistent state\n\n"
         "WHEN NOT TO USE (use these instead):\n"
+        "- Cross-profile orchestration -> use profile_delegate (persistent workers)\n"
         "- Mechanical multi-step work with no reasoning needed -> use execute_code\n"
         "- Single tool call -> just call the tool directly\n"
         "- Tasks needing user interaction -> subagents cannot use clarify\n\n"
@@ -746,7 +795,10 @@ DELEGATE_TASK_SCHEMA = {
                     "type": "object",
                     "properties": {
                         "goal": {"type": "string", "description": "Task goal"},
-                        "context": {"type": "string", "description": "Task-specific context"},
+                        "context": {
+                            "type": "string",
+                            "description": "Task-specific context",
+                        },
                         "toolsets": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -775,6 +827,689 @@ DELEGATE_TASK_SCHEMA = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Inter-profile delegation (profile_delegate)
+# ---------------------------------------------------------------------------
+
+import asyncio as _asyncio
+
+
+def check_profile_requirements() -> bool:
+    """Profile delegation requires no external dependencies."""
+    return True
+
+
+def profile_delegate(
+    profile: str,
+    goal: str,
+    context: Optional[str] = None,
+    wait: bool = True,
+    timeout: int = 300,
+    allow_subagents: bool = True,
+    max_depth: int = 2,
+    parent_agent=None,
+) -> str:
+    """
+    Delegate a task to a specific Hermes profile worker.
+
+    Connects to a running profile gateway or starts one if not already running.
+    This is the main orchestration tool for inter-profile communication.
+
+    Args:
+        profile:  Target profile name (e.g., 'coder', 'researcher').
+        goal:     Task description to send to the profile worker.
+        context:  Optional additional context information.
+        wait:     Wait for result or return immediately with task_id.
+        timeout:  Seconds to wait for result (default 300).
+        allow_subagents: Whether the delegated agent may spawn one-off
+                  subagents via delegate_task (default True).
+        max_depth: Maximum delegation depth (default 2). Prevents infinite
+                  delegation chains. Parent=0, child=1, grandchild=2.
+
+    Returns:
+        JSON string with the result (if wait=True) or task_id (if wait=False).
+    """
+    from tools.profile_orchestrator import (
+        ensure_profile_running,
+        send_to_profile,
+        send_to_profile_async,
+        is_profile_running,
+        discover_profiles,
+    )
+
+    if not profile or not str(profile).strip():
+        return json.dumps({"error": "Profile name is required"})
+
+    profile = str(profile).strip()
+
+    # Validate profile exists
+    available = discover_profiles()
+    if available and profile not in available:
+        return json.dumps(
+            {
+                "error": f"Profile '{profile}' not found",
+                "available": available,
+            }
+        )
+
+    # Ensure profile is running (start if needed)
+    if not is_profile_running(profile):
+        if not ensure_profile_running(profile):
+            return json.dumps({"error": f"Failed to start profile '{profile}'"})
+
+    # DEBUG: Check parent_agent
+    logger.info(
+        f"[DEBUG] profile_delegate: parent_agent is None = {parent_agent is None}"
+    )
+
+    # Extract conversation history from parent agent for context continuity
+    conversation_history = None
+    if parent_agent is not None:
+        try:
+            session_messages = getattr(parent_agent, "_session_messages", [])
+            logger.info(
+                f"[DEBUG] Found {len(session_messages)} session messages in parent_agent"
+            )
+            if session_messages:
+                conversation_history = [
+                    {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                    for msg in session_messages
+                    if msg.get("role") in ("user", "assistant", "system")
+                ]
+                logger.info(
+                    f"[DEBUG] Extracted {len(conversation_history)} messages for delegation"
+                )
+        except Exception as e:
+            logger.warning(
+                f"Failed to extract conversation history from parent agent: {e}"
+            )
+            conversation_history = None
+
+    # For async mode without parent_agent, try to load previous orchestration tasks
+    if conversation_history is None and not wait:
+        try:
+            from hermes_state import SessionDB
+
+            db = SessionDB()
+            # Get recent orchestration tasks for this profile
+            recent_tasks = db.list_orchestration_tasks(status=None, limit=10)
+            if recent_tasks:
+                history = []
+                for task in recent_tasks:
+                    if task.get("context"):
+                        try:
+                            ctx = json.loads(task["context"])
+                            if ctx.get("message"):
+                                history.append(
+                                    {"role": "user", "content": ctx["message"]}
+                                )
+                        except:
+                            pass
+                if history:
+                    conversation_history = history[-5:]  # Last 5 messages
+                    logger.info(
+                        f"[DEBUG] Loaded {len(conversation_history)} messages from previous async tasks"
+                    )
+        except Exception as e:
+            logger.debug(f"Could not load previous async task history: {e}")
+    if parent_agent is not None:
+        try:
+            session_messages = getattr(parent_agent, "_session_messages", [])
+            logger.info(
+                f"[DEBUG] Found {len(session_messages)} session messages in parent_agent"
+            )
+            if session_messages:
+                conversation_history = [
+                    {"role": msg.get("role", "user"), "content": msg.get("content", "")}
+                    for msg in session_messages
+                    if msg.get("role") in ("user", "assistant", "system")
+                ]
+                logger.info(
+                    f"[DEBUG] Extracted {len(conversation_history)} messages for delegation"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to extract conversation history: {e}")
+
+    try:
+        # Generate task_id for both sync and async modes (for searchability)
+        import uuid
+
+        task_id = str(uuid.uuid4())[:8]
+
+        if wait:
+            # Blocking mode: send directly and wait for result
+            # First, create DB record for searchability
+            try:
+                from hermes_state import SessionDB
+
+                db = SessionDB()
+                db.create_orchestration_task(
+                    task_id=task_id,
+                    parent_session_id=None,
+                    target_profile=profile,
+                    goal=goal,
+                    context=context,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to create orchestration task record: {e}")
+
+            result = send_to_profile(
+                profile_name=profile,
+                message=goal,
+                context={"additional_context": context} if context else None,
+                wait=True,
+                timeout=float(timeout),
+                conversation_history=conversation_history,
+                allow_subagents=allow_subagents,
+                max_depth=max_depth,
+            )
+
+            # Update DB with result
+            try:
+                from hermes_state import SessionDB
+
+                db = SessionDB()
+                db.update_orchestration_task(
+                    task_id=task_id,
+                    status="completed",
+                    result=result,
+                )
+            except Exception as e:
+                logger.debug(f"Failed to update orchestration task: {e}")
+
+            return json.dumps(
+                {"status": "completed", "result": result, "task_id": task_id}
+            )
+        else:
+            # Background mode: dispatch async and return task_id
+            task_id_or_coro = send_to_profile_async(
+                profile_name=profile,
+                message=goal,
+                context={"additional_context": context} if context else None,
+                conversation_history=conversation_history,
+                allow_subagents=allow_subagents,
+                max_depth=max_depth,
+            )
+            # send_to_profile_async is async; run it to get the task_id string
+            if _asyncio.iscoroutine(task_id_or_coro):
+                task_id = _asyncio.run(task_id_or_coro)
+            else:
+                task_id = task_id_or_coro
+            return json.dumps({"status": "dispatched", "task_id": task_id})
+
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except RuntimeError as e:
+        return json.dumps({"error": f"Profile communication error: {e}"})
+    except Exception as e:
+        logger.exception("profile_delegate failed")
+        return json.dumps({"error": f"Unexpected error: {e}"})
+
+
+def profile_delegate_async(
+    profile: str,
+    goal: str,
+    context: Optional[str] = None,
+    conversation_history: Optional[List[Dict[str, str]]] = None,
+) -> str:
+    """
+    Non-blocking version of profile_delegate.
+
+    Always returns immediately with a task_id for polling.
+    """
+    from tools.profile_orchestrator import (
+        ensure_profile_running,
+        send_to_profile_async,
+        is_profile_running,
+        discover_profiles,
+    )
+
+    if not profile or not str(profile).strip():
+        return json.dumps({"error": "Profile name is required"})
+
+    profile = str(profile).strip()
+
+    # Validate profile exists
+    available = discover_profiles()
+    if available and profile not in available:
+        return json.dumps(
+            {
+                "error": f"Profile '{profile}' not found",
+                "available": available,
+            }
+        )
+
+    # Ensure profile is running
+    if not is_profile_running(profile):
+        if not ensure_profile_running(profile):
+            return json.dumps({"error": f"Failed to start profile '{profile}'"})
+
+    try:
+        task_id_or_coro = send_to_profile_async(
+            profile_name=profile,
+            message=goal,
+            context={"additional_context": context} if context else None,
+            conversation_history=conversation_history,
+        )
+        if _asyncio.iscoroutine(task_id_or_coro):
+            task_id = _asyncio.run(task_id_or_coro)
+        else:
+            task_id = task_id_or_coro
+        return json.dumps({"status": "dispatched", "task_id": task_id})
+    except ValueError as e:
+        return json.dumps({"error": str(e)})
+    except Exception as e:
+        logger.exception("profile_delegate_async failed")
+        return json.dumps({"error": f"Unexpected error: {e}"})
+
+
+def profile_task_check(task_id: str, parent_agent=None) -> str:
+    """
+    Check the status of an async profile delegation task.
+
+    Args:
+        task_id: The task_id returned by profile_delegate (with wait=False).
+        parent_agent: Optional reference to parent agent (for consistency with other tools).
+
+    Returns:
+        JSON string with status and result (if completed).
+    """
+    from tools.profile_orchestrator import (
+        _profile_tasks,
+        collect_profile_result,
+    )
+
+    if not task_id:
+        return json.dumps({"error": "task_id is required"})
+
+    entry = _profile_tasks.get(task_id)
+    if entry:
+        future = entry["future"]
+
+        if entry.get("_cancelled", False):
+            return json.dumps(
+                {
+                    "status": "cancelled",
+                    "task_id": task_id,
+                }
+            )
+
+        import concurrent.futures
+
+        if not future.done():
+            return json.dumps({"status": "running", "task_id": task_id})
+
+        try:
+            result = collect_profile_result(task_id, block=False, timeout=0)
+            if result is not None:
+                return json.dumps(
+                    {
+                        "status": "completed",
+                        "task_id": task_id,
+                        "result": result,
+                    }
+                )
+            else:
+                return json.dumps(
+                    {
+                        "status": "completed",
+                        "task_id": task_id,
+                        "result": None,
+                    }
+                )
+        except RuntimeError as e:
+            return json.dumps({"status": "error", "task_id": task_id, "error": str(e)})
+        except Exception as e:
+            return json.dumps({"status": "error", "task_id": task_id, "error": str(e)})
+
+    try:
+        from hermes_state import SessionDB
+
+        db = SessionDB()
+        task_data = db.get_orchestration_task(task_id)
+
+        if task_data:
+            status = task_data.get("status", "unknown")
+            result = task_data.get("result")
+            error = task_data.get("error_message")
+
+            if status == "completed":
+                return json.dumps(
+                    {
+                        "status": "completed",
+                        "task_id": task_id,
+                        "result": result,
+                    }
+                )
+            elif status == "error":
+                return json.dumps(
+                    {
+                        "status": "error",
+                        "task_id": task_id,
+                        "error": error or "Unknown error",
+                    }
+                )
+            elif status in ("pending", "running"):
+                return json.dumps(
+                    {
+                        "status": "running",
+                        "task_id": task_id,
+                        "note": "Task is running but may have been restarted",
+                    }
+                )
+            else:
+                return json.dumps(
+                    {
+                        "status": status,
+                        "task_id": task_id,
+                    }
+                )
+    except Exception as e:
+        logger.debug(f"Failed to check SQLite for task {task_id}: {e}")
+
+    return json.dumps({"error": f"Unknown task_id: {task_id}"})
+
+
+def profile_task_cancel(task_id: str, parent_agent=None) -> str:
+    """
+    Cancel an async profile delegation task.
+
+    Args:
+        task_id: The task_id returned by profile_delegate (with wait=False).
+        parent_agent: Optional reference to parent agent (for consistency with other tools).
+
+    Returns:
+        JSON string with cancellation status.
+    """
+    from tools.profile_orchestrator import _profile_tasks
+
+    if not task_id:
+        return json.dumps({"error": "task_id is required"})
+
+    entry = _profile_tasks.get(task_id)
+    if entry:
+        future = entry["future"]
+        entry["_cancelled"] = True
+
+        cancelled = False
+        try:
+            cancelled = future.cancel()
+        except Exception as e:
+            logger.debug("Failed to cancel future for task %s: %s", task_id, e)
+
+        try:
+            del _profile_tasks[task_id]
+        except KeyError:
+            pass
+
+        try:
+            from hermes_state import SessionDB
+
+            db = SessionDB()
+            db.update_orchestration_task(
+                task_id=task_id,
+                status="cancelled",
+            )
+        except Exception as e:
+            logger.debug(f"Failed to update SQLite for cancelled task {task_id}: {e}")
+
+        if cancelled:
+            return json.dumps({"status": "cancelled", "task_id": task_id})
+        else:
+            return json.dumps(
+                {
+                    "status": "cancellation_attempted",
+                    "task_id": task_id,
+                    "note": "Task may already be running or completed",
+                }
+            )
+
+    try:
+        from hermes_state import SessionDB
+
+        db = SessionDB()
+        task_data = db.get_orchestration_task(task_id)
+
+        if task_data:
+            status = task_data.get("status")
+            if status in ("completed", "error", "cancelled"):
+                return json.dumps(
+                    {
+                        "status": "already_finished",
+                        "task_id": task_id,
+                        "previous_status": status,
+                        "note": "Task already completed, cannot cancel",
+                    }
+                )
+            else:
+                db.update_orchestration_task(
+                    task_id=task_id,
+                    status="cancelled",
+                )
+                return json.dumps(
+                    {
+                        "status": "cancelled",
+                        "task_id": task_id,
+                        "note": "Task was not in memory but marked as cancelled in database",
+                    }
+                )
+    except Exception as e:
+        logger.debug(f"Failed to check SQLite for task {task_id}: {e}")
+
+    return json.dumps({"error": f"Unknown task_id: {task_id}"})
+
+
+def profile_task_search(
+    query: str, status: str = None, limit: int = 20, parent_agent=None
+) -> str:
+    """
+    Natural language search of past profile delegation tasks across ALL profiles.
+
+    Searches every profile's orchestration_tasks database. Useful when you don't know
+    which profile handled a task, or when you want a complete history view.
+
+    Args:
+        query: Search terms (e.g., "security issues auth.py", "docker deployment")
+               Supports phrases: '"exact phrase"', boolean: "docker OR kubernetes"
+        status: Optional filter: "completed", "running", "pending", "error", "cancelled"
+        limit: Max results total (default 20)
+        parent_agent: Optional reference to parent agent.
+
+    Returns:
+        JSON string with matching tasks from all profiles, including source_profile field.
+
+    Example:
+        profile_task_search("security issues")
+        → Returns tasks from all profiles matching the query, each with source_profile field
+    """
+    if not query or not str(query).strip():
+        return json.dumps({"error": "Query is required"})
+
+    try:
+        from hermes_cli.profiles import list_profiles, get_profile_dir
+        from hermes_state import SessionDB
+
+        profiles = list_profiles()
+        if not profiles:
+            return json.dumps({"count": 0, "tasks": [], "profiles_searched": 0})
+
+        all_results = []
+        profiles_with_tasks = 0
+
+        for profile_info in profiles:
+            try:
+                profile_name = (
+                    profile_info.name
+                    if hasattr(profile_info, "name")
+                    else str(profile_info)
+                )
+                profile_dir = get_profile_dir(profile_name)
+                db_path = profile_dir / "state.db"
+
+                if not db_path.exists():
+                    continue
+
+                db = SessionDB(db_path=db_path)
+                tasks = db.search_orchestration_tasks(
+                    query=str(query).strip(),
+                    status=status,
+                    limit=limit,
+                )
+
+                if tasks:
+                    profiles_with_tasks += 1
+                    for task in tasks:
+                        task["source_profile"] = profile_name
+                        all_results.append(task)
+
+            except Exception as e:
+                logger.debug(f"Failed to search profile {profile_info}: {e}")
+                continue
+
+        # Sort by created_at (newest first)
+        all_results.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+
+        return json.dumps(
+            {
+                "count": len(all_results),
+                "tasks": all_results[:limit],
+                "profiles_searched": len(profiles),
+                "profiles_with_matches": profiles_with_tasks,
+            }
+        )
+    except Exception as e:
+        logger.exception("profile_task_search failed")
+        return json.dumps({"error": f"Search failed: {e}"})
+
+
+# OpenAI Function-Calling Schema for profile_delegate
+# ---------------------------------------------------------------------------
+
+PROFILE_DELEGATE_SCHEMA = {
+    "name": "profile_delegate",
+    "description": (
+        "CRITICAL: Use THIS tool for cross-profile orchestration, NOT delegate_task. "
+        "This connects to a persistent Hermes profile worker via HTTP (like coder, researcher). "
+        "The profile must exist in ~/.hermes/profiles/<profile_name>/ with its own gateway.\n\n"
+        "DIFFERENCE from delegate_task:\n"
+        "- profile_delegate: Uses persistent profile workers (separate HERMES_HOME, config, gateway)\n"
+        "- delegate_task: Spawns temporary one-off subagents (same HERMES_HOME, ephemeral)\n\n"
+        "WORKFLOW:\n"
+        "1. Call profile_delegate(profile='profile2', goal='...')\n"
+        "2. This connects to profile2's gateway at localhost:<port>\n"
+        "3. Profile2 processes the task with its own config/memory\n"
+        "4. Returns result from the persistent worker, not a temporary subagent\n\n"
+        "WHEN TO USE:\n"
+        "- Delegating to named profiles: coder, researcher, planner, etc.\n"
+        "- Tasks requiring isolated configs/memories per profile\n"
+        "- Multi-agent workflows with specialized persistent workers\n\n"
+        "WHEN NOT TO USE:\n"
+        "- For temporary subagents -> use delegate_task instead\n"
+        "- For single tool calls -> call the tool directly"
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "profile": {
+                "type": "string",
+                "description": "Target profile name (e.g., 'coder', 'researcher'). "
+                "Must be a directory under ~/.hermes/profiles/.",
+            },
+            "goal": {
+                "type": "string",
+                "description": "Task description to send to the profile worker.",
+            },
+            "context": {
+                "type": "string",
+                "description": "Additional context or instructions for the profile worker.",
+            },
+            "wait": {
+                "type": "boolean",
+                "default": True,
+                "description": "Wait for result (True, default) or return immediately with task_id (False).",
+            },
+            "timeout": {
+                "type": "integer",
+                "default": 300,
+                "description": "Seconds to wait for result when wait=True (default 300).",
+            },
+            "allow_subagents": {
+                "type": "boolean",
+                "default": True,
+                "description": "Whether the delegated agent may spawn one-off subagents via delegate_task. "
+                "Set to false to force the agent to do all work itself without spawning helpers.",
+            },
+            "max_depth": {
+                "type": "integer",
+                "default": 2,
+                "description": "Maximum delegation depth (default 2). Prevents infinite delegation chains. "
+                "Parent=0, child=1, grandchild=2. When depth is reached, subagents cannot delegate further.",
+            },
+        },
+        "required": ["profile", "goal"],
+    },
+}
+
+PROFILE_TASK_CHECK_SCHEMA = {
+    "name": "profile_task_check",
+    "description": "Check the status of an async profile delegation task.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "The task_id returned by profile_delegate with wait=False.",
+            },
+        },
+        "required": ["task_id"],
+    },
+}
+
+PROFILE_TASK_CANCEL_SCHEMA = {
+    "name": "profile_task_cancel",
+    "description": "Cancel an async profile delegation task.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "task_id": {
+                "type": "string",
+                "description": "The task_id returned by profile_delegate with wait=False.",
+            },
+        },
+        "required": ["task_id"],
+    },
+}
+
+PROFILE_TASK_SEARCH_SCHEMA = {
+    "name": "profile_task_search",
+    "description": (
+        "Cross-profile natural language search of past delegation tasks. "
+        "Searches ALL profiles' task histories to find tasks by goal or result. "
+        "Each result includes source_profile to identify which profile handled it."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "description": 'Search terms. Examples: "security issues", "auth refactor", "docker". '
+                'Supports phrases: \'"exact phrase"\', boolean: "docker OR kubernetes"',
+            },
+            "status": {
+                "type": "string",
+                "description": 'Optional filter: "completed", "running", "pending", "error", "cancelled"',
+            },
+            "limit": {
+                "type": "integer",
+                "default": 20,
+                "description": "Max results total across all profiles (default 20).",
+            },
+        },
+        "required": ["query"],
+    },
+}
+
+
 # --- Registry ---
 from tools.registry import registry
 
@@ -788,7 +1523,62 @@ registry.register(
         toolsets=args.get("toolsets"),
         tasks=args.get("tasks"),
         max_iterations=args.get("max_iterations"),
-        parent_agent=kw.get("parent_agent")),
+        parent_agent=kw.get("parent_agent"),
+    ),
     check_fn=check_delegate_requirements,
     emoji="🔀",
+)
+
+registry.register(
+    name="profile_delegate",
+    toolset="delegation",
+    schema=PROFILE_DELEGATE_SCHEMA,
+    handler=lambda args, **kw: profile_delegate(
+        profile=args.get("profile"),
+        goal=args.get("goal"),
+        context=args.get("context"),
+        wait=args.get("wait", True),
+        timeout=args.get("timeout", 300),
+        allow_subagents=args.get("allow_subagents", True),
+        max_depth=args.get("max_depth", 2),
+        parent_agent=kw.get("parent_agent"),
+    ),
+    check_fn=check_profile_requirements,
+    emoji="🔀",
+)
+
+registry.register(
+    name="profile_task_check",
+    toolset="delegation",
+    schema=PROFILE_TASK_CHECK_SCHEMA,
+    handler=lambda args, **kw: profile_task_check(
+        task_id=args.get("task_id"), parent_agent=kw.get("parent_agent")
+    ),
+    check_fn=check_profile_requirements,
+    emoji="📋",
+)
+
+registry.register(
+    name="profile_task_cancel",
+    toolset="delegation",
+    schema=PROFILE_TASK_CANCEL_SCHEMA,
+    handler=lambda args, **kw: profile_task_cancel(
+        task_id=args.get("task_id"), parent_agent=kw.get("parent_agent")
+    ),
+    check_fn=check_profile_requirements,
+    emoji="✋",
+)
+
+registry.register(
+    name="profile_task_search",
+    toolset="delegation",
+    schema=PROFILE_TASK_SEARCH_SCHEMA,
+    handler=lambda args, **kw: profile_task_search(
+        query=args.get("query"),
+        status=args.get("status"),
+        limit=args.get("limit", 10),
+        parent_agent=kw.get("parent_agent"),
+    ),
+    check_fn=check_profile_requirements,
+    emoji="🔍",
 )
