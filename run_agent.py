@@ -517,6 +517,8 @@ class AIAgent:
         step_callback: callable = None,
         stream_delta_callback: callable = None,
         tool_gen_callback: callable = None,
+        tool_start_callback: callable = None,
+        tool_complete_callback: callable = None,
         status_callback: callable = None,
         max_tokens: int = None,
         reasoning_config: Dict[str, Any] = None,
@@ -533,6 +535,7 @@ class AIAgent:
         checkpoints_enabled: bool = False,
         checkpoint_max_snapshots: int = 50,
         pass_session_id: bool = False,
+        credential_pool=None,
     ):
         """
         Initialize the AI Agent.
@@ -661,6 +664,8 @@ class AIAgent:
         self.stream_delta_callback = stream_delta_callback
         self.status_callback = status_callback
         self.tool_gen_callback = tool_gen_callback
+        self.tool_start_callback = tool_start_callback
+        self.tool_complete_callback = tool_complete_callback
         self._last_reported_tool = None  # Track for "new tool" mode
 
         # Tool execution state — allows _vprint during tool execution
@@ -1072,6 +1077,7 @@ class AIAgent:
 
         # SQLite session store (optional -- provided by CLI or gateway)
         self._session_db = session_db
+        self._credential_pool = credential_pool
         self._last_flushed_db_idx = (
             0  # tracks DB-write cursor to prevent duplicate writes
         )
