@@ -6117,7 +6117,7 @@ class AIAgent:
         # Start spinner for CLI mode (skip when TUI handles tool progress)
         spinner = None
         if self.quiet_mode and not self.tool_progress_callback:
-            face = random.choice(KawaiiSpinner.KAWAII_WAITING)
+            face = random.choice(KawaiiSpinner.get_waiting_faces())
             spinner = KawaiiSpinner(
                 f"{face} ⚡ running {num_tools} tools concurrently",
                 spinner_type="dots",
@@ -6431,7 +6431,7 @@ class AIAgent:
                     )
                 spinner = None
                 if self.quiet_mode and not self.tool_progress_callback:
-                    face = random.choice(KawaiiSpinner.KAWAII_WAITING)
+                    face = random.choice(KawaiiSpinner.get_waiting_faces())
                     spinner = KawaiiSpinner(
                         f"{face} {spinner_label}",
                         spinner_type="dots",
@@ -6466,7 +6466,7 @@ class AIAgent:
             elif self.quiet_mode:
                 spinner = None
                 if not self.tool_progress_callback:
-                    face = random.choice(KawaiiSpinner.KAWAII_WAITING)
+                    face = random.choice(KawaiiSpinner.get_waiting_faces())
                     emoji = _get_tool_emoji(function_name)
                     preview = (
                         _build_tool_preview(function_name, function_args)
@@ -7422,8 +7422,8 @@ class AIAgent:
                 )
             else:
                 # Animated thinking spinner in quiet mode
-                face = random.choice(KawaiiSpinner.KAWAII_THINKING)
-                verb = random.choice(KawaiiSpinner.THINKING_VERBS)
+                face = random.choice(KawaiiSpinner.get_thinking_faces())
+                verb = random.choice(KawaiiSpinner.get_thinking_verbs())
                 if self.thinking_callback:
                     # CLI TUI mode: use prompt_toolkit widget instead of raw spinner
                     # (works in both streaming and non-streaming modes)
